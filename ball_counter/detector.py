@@ -3,15 +3,9 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from ball_counter.preprocess import normalize_frame
-
-MASK_SATURATION_MIN = 70
-MASK_VALUE_MIN = 55
-MASK_RED_DOMINANCE_MARGIN = 20
-
-RED_LOWER_1 = (0, MASK_SATURATION_MIN, MASK_VALUE_MIN)
+RED_LOWER_1 = (0, 100, 80)
 RED_UPPER_1 = (8, 255, 255)
-RED_LOWER_2 = (172, MASK_SATURATION_MIN, MASK_VALUE_MIN)
+RED_LOWER_2 = (172, 100, 80)
 RED_UPPER_2 = (179, 255, 255)
 
 RED_DOMINANCE_MARGIN = 28
@@ -47,14 +41,17 @@ class RedBallDetector:
     MIN_WATERSHED_AREA = 200
 
     def detect(self, frame: np.ndarray) -> DetectResult:
-        normalized = normalize_frame(frame)
-        mask = self._red_mask(normalized)
-        candidates = self._find_ball_candidates(normalized, mask)
+        mask = self._red_mask(frame)
+        candidates = self._find_ball_candidates(frame, mask)
         balls = self._deduplicate(candidates)
         return DetectResult(count=len(balls), balls=balls, search_mask=mask)
 
     def _red_mask(self, frame: np.ndarray) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        v = clahe.apply(v)
+        hsv = cv2.merge([h, s, v])
 
         mask1 = cv2.inRange(hsv, np.array(RED_LOWER_1, dtype=np.uint8), np.array(RED_UPPER_1, dtype=np.uint8))
         mask2 = cv2.inRange(hsv, np.array(RED_LOWER_2, dtype=np.uint8), np.array(RED_UPPER_2, dtype=np.uint8))
@@ -62,8 +59,8 @@ class RedBallDetector:
 
         b, g, r = cv2.split(frame)
         red_dominant = (
-            (r.astype(np.int16) > g.astype(np.int16) + MASK_RED_DOMINANCE_MARGIN)
-            & (r.astype(np.int16) > b.astype(np.int16) + MASK_RED_DOMINANCE_MARGIN)
+            (r.astype(np.int16) > g.astype(np.int16) + RED_DOMINANCE_MARGIN)
+            & (r.astype(np.int16) > b.astype(np.int16) + RED_DOMINANCE_MARGIN)
         ).astype(np.uint8) * 255
 
         mask = cv2.bitwise_and(hsv_mask, red_dominant)
