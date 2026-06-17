@@ -1,0 +1,74 @@
+@startuml
+title Humanoid Arm - System Architecture
+
+left to right direction
+
+actor "User / Operator" as User
+
+package "Software" {
+  component "Control Software" as Control
+  component "Camera Processing" as CameraProcessing
+  component "Sensor Processing" as SensorProcessing
+}
+
+package "Main Controller" {
+  component "Raspberry Pi / Main Controller" as Pi
+}
+
+package "Hardware" {
+
+  package "Torso / Base" {
+    component "Power Supply" as Power
+    component "Main Mount / Base" as Base
+  }
+
+  package "Arm" {
+    component "Motor Driver / Servo Controller" as Driver
+    component "Shoulder Actuator" as Shoulder
+    component "Elbow Actuator" as Elbow
+    component "Wrist Actuator" as Wrist
+  }
+
+  package "Claw" {
+    component "Claw Actuator" as Gripper
+  }
+
+  package "Sensors" {
+    component "Camera" as Camera
+    component "IMU" as IMU
+    component "Encoders / Position Feedback" as Encoders
+    component "Limit Switches" as Limits
+  }
+}
+
+User -left-> Control : command
+
+Camera --> CameraProcessing : camera feed
+CameraProcessing --> Control : detected object / target info
+
+IMU --> SensorProcessing : motion data
+Encoders --> SensorProcessing : joint position
+Limits --> SensorProcessing : joint limit status
+SensorProcessing --> Control : feedback
+
+Control --> Pi : movement command
+Pi --> Driver : motor control signals
+
+Driver --> Shoulder : drive signal
+Driver --> Elbow : drive signal
+Driver --> Wrist : drive signal
+Driver --> Gripper : drive signal
+
+Shoulder --> Encoders : position feedback
+Elbow --> Encoders : position feedback
+Wrist --> Encoders : position feedback
+Gripper --> Encoders : position feedback
+
+Power --> Pi : power
+Power --> Driver : motor power
+Power --> Camera : sensor power
+Power --> IMU : sensor power
+Power --> Encoders : sensor power
+Power --> Limits : sensor power
+
+@enduml
