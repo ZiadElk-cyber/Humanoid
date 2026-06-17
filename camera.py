@@ -1,82 +1,95 @@
 import cv2
 
-from pen_counter.colors import COLOR_ORDER
-from pen_counter.detector import DetectionMode, DetectResult, PenDetector
-from pen_counter.overlay import draw_overlay
+from ball_counter.camera_io import open_camera
+from ball_counter.detector import RedBallDetector
+from ball_counter.overlay import draw_info_panel, draw_stereo_view
+from ball_counter.stereo import StereoFusion
+from ball_counter.tracker import BallTracker
 
-_EMPTY_RESULT = DetectResult(
-    counts={color: 0 for color in COLOR_ORDER},
-    detections=[],
-    search_mask=None,
-)
+STEREO_WINDOW = "Red Ball Counter - Stereo"
+INFO_WINDOW = "Red Ball Counter - Info"
+LEFT_CAMERA_INDEX = 0
+RIGHT_CAMERA_INDEX = 1
 
-WINDOW_NAME = "Pen Counter"
+
+def _align_frame(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+    if frame.shape[1] == width and frame.shape[0] == height:
+        return frame
+    return cv2.resize(frame, (width, height))
 
 
 def main() -> None:
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        raise RuntimeError("Could not open camera. Check that a webcam is connected.")
+    cap_left = open_camera(LEFT_CAMERA_INDEX)
+    cap_right = open_camera(RIGHT_CAMERA_INDEX)
 
-    detector = PenDetector(mode=DetectionMode.TABLE)
+    detector = RedBallDetector()
+    stereo = StereoFusion()
+    tracker = BallTracker()
     debug_mode = False
 
-    print("Pen counter started (table mode).")
-    print("Remove all pens, hold camera still, press 'c' to calibrate (~1s).")
-    print("Press 'h' to switch hand/table mode, 'd' for debug view, 'q' to quit.")
+    cv2.namedWindow(STEREO_WINDOW)
+    cv2.namedWindow(INFO_WINDOW, cv2.WINDOW_AUTOSIZE)
+
+    print(
+        f"Red ball counter started (cameras {LEFT_CAMERA_INDEX} left, "
+        f"{RIGHT_CAMERA_INDEX} right)."
+    )
+    print("Point both cameras at red balls. Press 'd' for debug view, 'q' to quit.")
+
+    info_window_positioned = False
 
     try:
         while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to read frame from camera.")
+            ret_l, frame_l = cap_left.read()
+            ret_r, frame_r = cap_right.read()
+            if not ret_l or not ret_r:
+                print("Failed to read frame from one or both cameras.")
                 break
 
-            if detector.is_calibrating:
-                cal_result = detector.add_calibration_frame(frame)
-                if cal_result is not None:
-                    print(cal_result.message)
-                detect_result = _EMPTY_RESULT
-            else:
-                detect_result = detector.detect(frame)
+            height, width = frame_l.shape[:2]
+            frame_r = _align_frame(frame_r, width, height)
 
-            current, total = detector.calibration_progress
-            display = draw_overlay(
-                frame,
-                detect_result.counts,
-                detect_result.detections,
-                mode=detector.mode,
-                calibrated=detector.calibrated,
-                calibrating=detector.is_calibrating,
-                calibration_progress=(current, total) if detector.is_calibrating else None,
-                calibration_warning=detector.calibration_warning,
+            left_result = detector.detect(frame_l)
+            right_result = detector.detect(frame_r)
+            fused = stereo.fuse(left_result.balls, right_result.balls)
+            stable_balls = tracker.update(fused)
+
+            stereo_display = draw_stereo_view(
+                frame_l,
+                frame_r,
+                left_result.balls,
+                right_result.balls,
+                stable_balls,
+                stereo.last_pairs,
                 debug=debug_mode,
-                search_mask=detect_result.search_mask,
+                search_mask_l=left_result.search_mask,
+                search_mask_r=right_result.search_mask,
+            )
+            info_display = draw_info_panel(
+                len(stable_balls),
+                debug=debug_mode,
+                stereo=True,
+                left_count=len(left_result.balls),
+                right_count=len(right_result.balls),
+                fused_count=len(fused),
             )
 
-            cv2.imshow(WINDOW_NAME, display)
+            cv2.imshow(STEREO_WINDOW, stereo_display)
+            cv2.imshow(INFO_WINDOW, info_display)
+
+            if not info_window_positioned:
+                cv2.moveWindow(INFO_WINDOW, stereo_display.shape[1] + 20, 0)
+                info_window_positioned = True
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
-            if key == ord("c") and detector.mode == DetectionMode.TABLE and not detector.is_calibrating:
-                detector.start_calibration()
-                print("Calibrating... remove all pens and hold the camera still.")
-            if key == ord("h"):
-                if detector.mode == DetectionMode.TABLE:
-                    detector.set_mode(DetectionMode.HAND)
-                    detector.clear_calibration()
-                    print("Switched to hand mode.")
-                else:
-                    detector.set_mode(DetectionMode.TABLE)
-                    detector.clear_calibration()
-                    print("Switched to table mode. Remove pens and press 'c' to calibrate.")
             if key == ord("d"):
                 debug_mode = not debug_mode
                 print(f"Debug view: {'ON' if debug_mode else 'OFF'}")
     finally:
-        detector.close()
-        cap.release()
+        cap_left.release()
+        cap_right.release()
         cv2.destroyAllWindows()
 
 
